@@ -4,11 +4,61 @@ import asyncio
 import os
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
+
 import paho.mqtt.client as mqtt
+import paho.mqtt.subscribe as subscribe
+
 import logging
 from typing import Awaitable, Callable, Union
+from collections import deque
 
+def get_daily() -> dict:
+    dailyValue: dict = {}
+    try:
+        yesterday = datetime.strftime(datetime.now() - timedelta(1), '%Y%m%d')
+        topic = "/energy/hist-" + yesterday
+        msg = subscribe.simple(topic, hostname=os.getenv("MQTT_BROKER"))
+        #print("Yesterday total %s %s" % (msg.topic, msg.payload))
+        decoded_message = str(msg.payload.decode("utf-8"))
+        lastValues = json.loads(decoded_message)
+        dailyValue['electricityImportedT1Yesterday'] = lastValues['electricityImportedT1'] 
+        dailyValue['electricityImportedT2Yesterday'] = lastValues['electricityImportedT2'] 
+        dailyValue['electricityExportedT1Yesterday'] = lastValues['electricityExportedT1'] 
+        dailyValue['electricityExportedT2Yesterday'] = lastValues['electricityExportedT2'] 
+        dailyValue['gasYesterday'] = lastValues['gas'] 
+        dailyValue['date'] = yesterday
+        logging.info("Yesterday total %s " % json.dumps(dailyValue, indent=4, sort_keys=True))
+    except Exception as err:
+        logging.error(f"Unable to publish telegram on MQTT: {err}")
+        dailyValue['date'] = datetime.strftime(datetime.now(), '%Y%m%d')
+    return dailyValue
+
+def get_phases() -> dict:
+    lastPhase: dict = {}
+    try:
+        topic = "/energy/meter"
+        msg = subscribe.simple(topic, hostname=os.getenv("MQTT_BROKER"))
+        decoded_message = str(msg.payload.decode("utf-8"))
+        lastValues = json.loads(decoded_message)
+        lastPhase['electricityImportedL1'] = lastValues['electricityImportedL1'] 
+        lastPhase['electricityImportedL2'] = lastValues['electricityImportedL2'] 
+        lastPhase['electricityImportedL3'] = lastValues['electricityImportedL3'] 
+        lastPhase['electricityExportedL1'] = lastValues['electricityExportedL1'] 
+        lastPhase['electricityExportedL2'] = lastValues['electricityExportedL2'] 
+        lastPhase['electricityExportedL3'] = lastValues['electricityExportedL3'] 
+        lastPhase['timestamp'] = lastValues['timestamp'] 
+        logging.info("Phases last %s " % json.dumps(lastPhase, indent=4, sort_keys=True))
+    except Exception as err:
+        logging.error(f"Unable to getting history from on MQTT: {err}")
+        lastPhase['electricityImportedL1'] = 0.0 
+        lastPhase['electricityImportedL2'] = 0.0
+        lastPhase['electricityImportedL3'] = 0.0
+        lastPhase['electricityExportedL1'] = 0.0
+        lastPhase['electricityExportedL2'] = 0.0
+        lastPhase['electricityExportedL3'] = 0.0
+        lastPhase['timestamp'] = int(datetime.now().timestamp())
+    return lastPhase
 
 load_dotenv()
 logging.basicConfig(
@@ -25,6 +75,9 @@ obis: list = json.load(open(os.path.join(os.path.dirname(__file__), "obis.json")
 mqtt_client = mqtt.Client()
 mqtt_client.connect(os.getenv("MQTT_BROKER"), 1883, 60)
 mqtt_client.loop_start()
+
+dailyValues: dict = get_daily() 
+phaseMeter : dict = get_phases()
 
 
 def calc_crc(telegram: list[bytes]) -> str:
@@ -56,11 +109,14 @@ def parse_hex(str) -> str:
 
 
 async def send_telegram(telegram: list[bytes]) -> None:
-    def format_value(value: str, type: str) -> Union[str, float]:
+    def format_value(value: str, type: str, unit: str) -> Union[str, float]:
         # Timestamp has message of format "YYMMDDhhmmssX"
+        multiply = 1
+        if (len(unit) > 0 and unit[0]=='k'):
+            multiply = 1000
         format_functions: dict = {
-            "float": lambda str: float(str),
-            "int": lambda str: int(str),
+            "float": lambda str: float(str) * multiply,
+            "int": lambda str: int(str) * multiply,
             "timestamp": lambda str: int(
                 datetime.strptime(str[:-1], "%y%m%d%H%M%S").timestamp()
             ),
@@ -81,9 +137,11 @@ async def send_telegram(telegram: list[bytes]) -> None:
             )
             if obis_item is not None:
                 item_type: str = obis_item.get("type", "")
+                #logging.debug("Key %s  Name: %s Unit: %s <-- %s" %  (obis_item.get("key", "") ,  obis_item.get("name", "") , obis_item.get("unit", "no unit") , line. strip()) )
+                unit = obis_item.get("unit", "no unit")
                 item_value_position: Union[int, None] = obis_item.get("valuePosition")
                 telegram_formatted[obis_item.get("name")] = (
-                    format_value(matches[1][1], item_type)
+                    format_value(matches[1][1], item_type, unit )
                     if len(matches) == 2
                     else (
                         "|".join(
@@ -94,6 +152,7 @@ async def send_telegram(telegram: list[bytes]) -> None:
                                         item_type[index]
                                         if type(item_type) == list
                                         else item_type,
+                                        unit
                                     )
                                 )
                                 for index, match in enumerate(matches[1:])
@@ -103,10 +162,75 @@ async def send_telegram(telegram: list[bytes]) -> None:
                         else format_value(
                             matches[2][1],
                             item_type[item_value_position],
+                            unit
                         )
                     )
                 )
-    try:
+
+    global dailyValues
+    yesterday = datetime.strftime(datetime.now() - timedelta(1), '%Y%m%d')
+    if ( dailyValues['date'] != yesterday):
+        logging.error ( "No MQTT HISTORY... getting update")
+        dailyValues = get_daily()
+    if ( dailyValues['date'] == datetime.strftime(datetime.now(), '%Y%m%d')):
+        logging.error ( "No MQTT HISTORY... restting")
+        dailyValues['electricityImportedT1Yesterday'] = telegram_formatted['electricityImportedT1'] 
+        dailyValues['electricityImportedT2Yesterday'] = telegram_formatted['electricityImportedT2'] 
+        dailyValues['electricityExportedT1Yesterday'] = telegram_formatted['electricityExportedT1'] 
+        dailyValues['electricityExportedT2Yesterday'] = telegram_formatted['electricityExportedT2']
+        dailyValue['gasYesterday'] = telegram_formatted['gas']  
+        dailyValues['date'] = yesterday
+
+    telegram_formatted['electricityImportedT1Today'] = telegram_formatted['electricityImportedT1'] - dailyValues['electricityImportedT1Yesterday']
+    telegram_formatted['electricityImportedT2Today'] = telegram_formatted['electricityImportedT2'] -  dailyValues['electricityImportedT2Yesterday']
+    telegram_formatted['electricityImportedToday'] = telegram_formatted['electricityImportedT1Today'] + telegram_formatted['electricityImportedT2Today']
+    telegram_formatted['electricityImported'] = telegram_formatted['electricityImportedT1'] + telegram_formatted['electricityImportedT2']
+
+    telegram_formatted['electricityExportedT1Today'] =  telegram_formatted['electricityExportedT1'] - dailyValues['electricityExportedT1Yesterday'] 
+    telegram_formatted['electricityExportedT2Today'] =  telegram_formatted['electricityExportedT2'] - dailyValues['electricityExportedT2Yesterday']
+    telegram_formatted['electricityExportedToday'] =  telegram_formatted['electricityExportedT1Today'] + telegram_formatted['electricityExportedT2Today']
+    telegram_formatted['electricityExported'] =  telegram_formatted['electricityExportedT1'] + telegram_formatted['electricityExportedT2']
+
+    global phaseMeter
+    sumPeriod = 60.0 * 60.0 / ( telegram_formatted['timestamp'] - phaseMeter["timestamp"] )
+    logging.info ("timedelata %d", ( telegram_formatted['timestamp'] - phaseMeter["timestamp"] ))
+    
+    phaseSumImport = phaseMeter["electricityImportedL1"] + phaseMeter["electricityImportedL2"] + phaseMeter["electricityImportedL3"]
+    deltaImport = telegram_formatted['electricityImported'] - phaseSumImport
+    if ( deltaImport > 1000 ):
+        logging.info ( "Delta phaseSumImport too big, resetting sum: %d  - real: %d " % (phaseSumImport, telegram_formatted['electricityImported'] ))
+        phaseMeter["electricityImportedL1"] = phaseMeter["electricityImportedL1"]  + (deltaImport / 3)
+        phaseMeter["electricityImportedL2"] = phaseMeter["electricityImportedL2"]  + (deltaImport / 3)
+        phaseMeter["electricityImportedL3"] = phaseMeter["electricityImportedL3"]  + (deltaImport / 3)
+    else:
+        phaseMeter["electricityImportedL1"] = phaseMeter["electricityImportedL1"] + (telegram_formatted['instantaneousActivePowerL1Plus'] / sumPeriod)
+        phaseMeter["electricityImportedL2"] = phaseMeter["electricityImportedL2"] + (telegram_formatted['instantaneousActivePowerL2Plus'] / sumPeriod)
+        phaseMeter["electricityImportedL3"] = phaseMeter["electricityImportedL3"] + (telegram_formatted['instantaneousActivePowerL3Plus'] / sumPeriod)
+    telegram_formatted['electricityImportedL1'] = phaseMeter["electricityImportedL1"] 
+    telegram_formatted['electricityImportedL2'] = phaseMeter["electricityImportedL2"] 
+    telegram_formatted['electricityImportedL3'] = phaseMeter["electricityImportedL3"] 
+
+    phaseSumExport = phaseMeter["electricityExportedL1"] + phaseMeter["electricityExportedL2"] + phaseMeter["electricityExportedL3"]
+    deltaExport = telegram_formatted['electricityExported'] - phaseSumExport
+    phaseMeter["timestamp"] = telegram_formatted['timestamp']
+    if ( deltaExport > 1000 ):
+        logging.info ( "Delta phaseSumExport too big, resetting sum: %d  - real: %d  delta: %d " % (phaseSumExport, telegram_formatted['electricityExported'],deltaExport ))
+        phaseMeter["electricityExportedL1"] = phaseMeter["electricityExportedL1"]  + (deltaExport / 3)
+        phaseMeter["electricityExportedL2"] = phaseMeter["electricityExportedL2"]  + (deltaExport / 3)
+        phaseMeter["electricityExportedL3"] = phaseMeter["electricityExportedL3"]  + (deltaExport / 3)
+    else:
+        phaseMeter["electricityExportedL1"] = phaseMeter["electricityExportedL1"] + (telegram_formatted['instantaneousActivePowerL1Min'] / sumPeriod)
+        phaseMeter["electricityExportedL2"] = phaseMeter["electricityExportedL2"] + (telegram_formatted['instantaneousActivePowerL2Min'] / sumPeriod)
+        phaseMeter["electricityExportedL3"] = phaseMeter["electricityExportedL3"] + (telegram_formatted['instantaneousActivePowerL3Min'] / sumPeriod)
+    telegram_formatted['electricityExportedL1'] = phaseMeter["electricityExportedL1"] 
+    telegram_formatted['electricityExportedL2'] = phaseMeter["electricityExportedL2"] 
+    telegram_formatted['electricityExportedL3'] = phaseMeter["electricityExportedL3"] 
+    logging.debug("deltaImport: %d , deltaExport: %d \nPhases last %s " % (deltaImport,deltaExport, json.dumps(phaseMeter, indent=4, sort_keys=True)))
+
+
+    telegram_formatted['gasToday'] =  telegram_formatted['gas'] - dailyValues['gasYesterday'] 
+    
+    try:    
         result = mqtt_client.publish(
             os.getenv("MQTT_TOPIC"), payload=json.dumps(telegram_formatted), retain=True
         )
@@ -114,9 +238,13 @@ async def send_telegram(telegram: list[bytes]) -> None:
             logging.info("Telegram published on MQTT")
         else:
             logging.error(f"Telegram not published (return code {result.rc})")
+        
+        result = mqtt_client.publish("/energy/hist-"+datetime.fromtimestamp(telegram_formatted['timestamp']).strftime("%Y%m%d"), payload=json.dumps(telegram_formatted), retain=True
+        )
+        if result.rc != 0:
+            logging.error(f"Telegram not published (return code {result.rc})")
     except Exception as err:
         logging.error(f"Unable to publish telegram on MQTT: {err}")
-
 
 async def process_lines(reader):
     telegram: Union[list, None] = None
@@ -147,7 +275,7 @@ async def process_lines(reader):
 async def read_telegram():
     reader: StreamReader
     writer: StreamWriter
-    reader, writer = await asyncio.open_connection(P1_ADDRESS, 23)
+    reader, writer = await asyncio.open_connection(P1_ADDRESS, 2000)
     try:
         await process_lines(reader)
     except Exception as err:
