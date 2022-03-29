@@ -20,28 +20,28 @@
         },
         {
             "key": "1-0:1.8.1",
-            "name": "electricityDeliveredT1",
+            "name": "electricityImportedT1",
             "unit": "kWh",
             "type": "float",
             "description": "Meter Reading electricity delivered to client (low tariff) in 0,001 kWh"
         },
         {
             "key": "1-0:1.8.2",
-            "name": "electricityDeliveredT2",
+            "name": "electricityImportedT2",
             "unit": "kWh",
             "type": "float",
             "description": "Meter Reading electricity delivered to client (normal tariff) in 0,001 kWh"
         },
         {
             "key": "1-0:2.8.1",
-            "name": "electricitySuppliedT1",
+            "name": "electricityExportedT1",
             "unit": "kWh",
             "type": "float",
             "description": "Meter Reading electricity delivered by client (low tariff) in 0,001 kWh"
         },
         {
             "key": "1-0:2.8.2",
-            "name": "electricitySuppliedT2",
+            "name": "electricityExportedT2",
             "unit": "kWh",
             "type": "float",
             "description": "Meter Reading electricity delivered by client (normal tariff) in 0,001 kWh"
@@ -54,14 +54,14 @@
         },
         {
             "key": "1-0:1.7.0",
-            "name": "electricityDeliveredActual",
+            "name": "electricityImportedActual",
             "unit": "kW",
             "type": "float",
             "description": "Actual electricity power delivered (+P) in 1 Watt resolution"
         },
         {
             "key": "1-0:2.7.0",
-            "name": "electricitySuppliedActual",
+            "name": "electricityExportedActual",
             "unit": "kW",
             "type": "float",
             "description": "Actual electricity power received (-P) in 1 Watt resolution"
@@ -224,11 +224,10 @@
         },
         {
             "key": "0-1:24.2.1",
-            "name": "deviceValue1",
+            "name": "gas",
             "unit": "m³",
             "type": ["timestamp", "float"],
             "valuePosition": 1,
             "description": "Last 5-minute value (temperature converted), gas delivered to client in m3, including decimal values and capture time"
-        }
-    ]
+        }    ]
 }
