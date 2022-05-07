@@ -56,11 +56,14 @@ def parse_hex(str) -> str:
 
 
 async def send_telegram(telegram: list[bytes]) -> None:
-    def format_value(value: str, type: str) -> Union[str, float]:
+    def format_value(value: str, type: str, unit: str) -> Union[str, float]:
         # Timestamp has message of format "YYMMDDhhmmssX"
+        multiply = 1
+        if (len(unit) > 0 and unit[0]=='k'):
+            multiply = 1000
         format_functions: dict = {
-            "float": lambda str: float(str),
-            "int": lambda str: int(str),
+            "float": lambda str: float(str) * multiply,
+            "int": lambda str: int(str) * multiply,
             "timestamp": lambda str: int(
                 datetime.strptime(str[:-1], "%y%m%d%H%M%S").timestamp()
             ),
@@ -81,9 +84,11 @@ async def send_telegram(telegram: list[bytes]) -> None:
             )
             if obis_item is not None:
                 item_type: str = obis_item.get("type", "")
+                #logging.debug("Key %s  Name: %s Unit: %s <-- %s" %  (obis_item.get("key", "") ,  obis_item.get("name", "") , obis_item.get("unit", "no unit") , line. strip()) )
+                unit = obis_item.get("unit", "no unit")
                 item_value_position: Union[int, None] = obis_item.get("valuePosition")
                 telegram_formatted[obis_item.get("name")] = (
-                    format_value(matches[1][1], item_type)
+                    format_value(matches[1][1], item_type, unit )
                     if len(matches) == 2
                     else (
                         "|".join(
@@ -94,6 +99,7 @@ async def send_telegram(telegram: list[bytes]) -> None:
                                         item_type[index]
                                         if type(item_type) == list
                                         else item_type,
+                                        unit
                                     )
                                 )
                                 for index, match in enumerate(matches[1:])
@@ -103,6 +109,7 @@ async def send_telegram(telegram: list[bytes]) -> None:
                         else format_value(
                             matches[2][1],
                             item_type[item_value_position],
+                            unit
                         )
                     )
                 )
@@ -147,7 +154,7 @@ async def process_lines(reader):
 async def read_telegram():
     reader: StreamReader
     writer: StreamWriter
-    reader, writer = await asyncio.open_connection(P1_ADDRESS, 23)
+    reader, writer = await asyncio.open_connection(P1_ADDRESS, 2000)
     try:
         await process_lines(reader)
     except Exception as err:
